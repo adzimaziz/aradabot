@@ -357,7 +357,7 @@ function frame(time, xf) {
   listener.matrixWorld.copy(world.matrixWorld).invert().multiply(cam.matrixWorld);
   sfx.setListener(listener);
   hoverHum.update(bot.position, world.visible && bot.visible && !botMode ? .15 : 0);
-  primeHum.update(prime.active && prime.headPos(soundAt) || bot.position, prime.active ? prime.thrust * .45 : 0);
+  primeHum.update(prime.active && prime.headPos(soundAt) && world.worldToLocal(soundAt) || bot.position, prime.active ? prime.thrust * .45 : 0);
 
   renderer.render(scene, camera);
 }

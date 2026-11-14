@@ -63,12 +63,13 @@ export function createPrime(scene, bot) {
   let FEET = [], soleGap = 0, baseY = 0, skin = null, seatT = 0;
   // Sitting / asleep: the buttocks are the lowest part, so plant the lowest point of the skinned mesh itself
   // (CPU skinning, so only a few times a second)
+  const parentInv = new THREE.Matrix4();
   function plantSeat(dt) {
     if (!skin) return;
     if ((seatT -= dt) <= 0) {
       seatT = .25;
       skin.skeleton.update(); skin.computeBoundingBox();
-      const b = skin.boundingBox.clone().applyMatrix4(skin.matrixWorld);
+      const b = skin.boundingBox.clone().applyMatrix4(skin.matrixWorld).applyMatrix4(parentInv.copy(group.parent.matrixWorld).invert());
       plantSeat.want = inner.position.y - (b.min.y - (spot.y + alt)) / (P.unit * formScale);   // metres off the floor -> model units
     }
     if (plantSeat.want !== undefined) inner.position.y += (plantSeat.want - inner.position.y) * Math.min(1, dt * 8);
@@ -129,7 +130,9 @@ export function createPrime(scene, bot) {
     // everything below is measured in model units (1.0 tall) with the group at identity. In MR the group has usually
     // been placed and turned toward you already, which skewed every joint measurement (ADAprime ended up "sitting"),
     // so take it to the origin for the measurements and put it back afterwards.
-    const keepPos = group.position.clone(), keepRot = group.rotation.clone(), keepScale = group.scale.clone();
+    // AR: the parent (the app's world group) is scaled and moved too, so measure with ADAprime taken out of it
+    const keepPos = group.position.clone(), keepRot = group.rotation.clone(), keepScale = group.scale.clone(), keepParent = group.parent;
+    if (keepParent) keepParent.remove(group);
     group.position.set(0, 0, 0); group.rotation.set(0, 0, 0); group.scale.set(1, 1, 1);
     group.updateMatrixWorld(true);
     const wq = o => o.getWorldQuaternion(new THREE.Quaternion()), wp = o => o.getWorldPosition(new THREE.Vector3());
@@ -177,6 +180,7 @@ export function createPrime(scene, bot) {
     soleGap = Math.min(...FEET.map(b => wp(b).y)) - box.min.y;          // lowest foot joint above the sole, at rest
     baseY = -box.min.y; inner.position.y = baseY;
     P.unit = PRIME_HEIGHT / Math.max(.2, headTop - box.min.y);
+    if (keepParent) keepParent.add(group);
     group.position.copy(keepPos); group.rotation.copy(keepRot); group.scale.copy(keepScale); group.updateMatrixWorld(true);
     now = pflat(PPOSE.idle()); target = pflat(PPOSE.idle()); P.ready = true;
   }
