@@ -334,7 +334,8 @@ async function startCam() {
   pad.visible = true;
   placeWorld(new THREE.Vector3(0, 0, 0));
   setSize(.6);                                               // no real floor to judge by: start a bit smaller
-  if (!motion && typeof window.DeviceOrientationEvent?.requestPermission === 'function') toast('Benarkan "Motion & Orientation" untuk AR lantai');
+  if (!motion && typeof window.DeviceOrientationEvent?.requestPermission === 'function') hint('AR lantai perlukan izin "Motion & Orientation". Tekan ✕, kemudian Mula AR dan pilih Allow.');
+  else if (motion && camOK && !gyroSeen) hint('Giroskop tak bertindak balas. Mod kamera biasa.');
 }
 function stopAll() {
   if (session) { const s = session; session = null; s.end().catch(() => {}); }
