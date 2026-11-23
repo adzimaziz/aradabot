@@ -10,7 +10,8 @@ ADAbot dalam AR di telefon. Laman statik sahaja: **tiada server, tiada API Claud
 
 ## Telefon yang disokong
 - **Android + Chrome:** AR penuh (WebXR, scan lantai).
-- **iPhone / pelayar tanpa WebXR:** "mod kamera" (robot atas gambar kamera, tanpa scan lantai). Safari belum sokong WebXR AR.
+- **iPhone (Safari):** "AR giroskop". Safari belum sokong WebXR, jadi lantai tak boleh di-scan betul-betul; ADAbot dikunci atas lantai guna giroskop telefon. Benarkan kamera dan *Motion & Orientation*. Berdiri di satu tempat dan pusing telefon; kalau berjalan, ADAbot ikut sekali.
+- **PC / tanpa giroskop:** "mod kamera" (robot atas gambar kamera).
 
 Perlu **https** (GitHub Pages dah https).
 

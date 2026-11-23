@@ -1,6 +1,7 @@
 // AR ADAbot: ADAbot (and ADAprime) on your floor, on a phone. No server, no AI: everything runs in the browser.
-// WebXR immersive-ar with hit-test (Android Chrome). Phones without it (iPhone) get "camera mode": the robots over
-// the camera picture, without floor tracking.
+// WebXR immersive-ar with hit-test (Android Chrome). Phones without it (iPhone Safari has no WebXR) get "gyro AR":
+// the camera picture plus the phone's gyroscope, so the robots stay put on the floor while you turn the phone (you
+// stand in one spot; walking isn't tracked). No gyroscope either (a PC): plain camera mode.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createPrime } from './prime.js';
@@ -15,7 +16,8 @@ const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 // and its scale is the size slider. Positions inside it are "local units" (1 = 1 m at 100%).
 const HOVER = .5, BOT_SCALE = .22, BOT_SPEED = .9;
 let renderer, scene, camera, clock, world, bot, model, prime, reticle, tapMark, pad;
-let mode = 'start';                                           // 'start' | 'ar' | 'cam'
+let mode = 'start';  let gyroOn = false;                 // gyroOn: 'cam' mode with the gyroscope steering the view
+                                           // 'start' | 'ar' | 'cam'
 let session = null, hitSource = null, placed = false, size = 1;
 const head = new THREE.Vector3(), headL = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
 
@@ -54,7 +56,7 @@ function initScene() {
 
   buildFace();
   ['pointerdown', 'keydown'].forEach(ev => addEventListener(ev, sfx.unlock, { passive: true }));
-  addEventListener('resize', () => { if (renderer.xr.isPresenting) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+  addEventListener('resize', () => { if (renderer.xr.isPresenting) return; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); if (gyroOn) fitFov(); });
   renderer.setAnimationLoop(safeFrame);
   window.aradabot = { prime, bot, world, THREE, get size() { return size; } };   // debug handle
 }
@@ -217,7 +219,7 @@ function setupTouches() {
 }
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hitV = new THREE.Vector3();
 function onTap(x, y) {
-  if (mode === 'ar' && !placed) { if (reticle.visible) placeWorld(new THREE.Vector3().setFromMatrixPosition(reticle.matrix)); return; }
+  if ((mode === 'ar' || gyroOn) && !placed) { if (reticle.visible) placeWorld(new THREE.Vector3().setFromMatrixPosition(reticle.matrix)); return; }
   if (!placed || prime.cine) return;
   const cam = mode === 'ar' ? renderer.xr.getCamera().cameras[0] || renderer.xr.getCamera() : camera;
   ndc.set(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1);
@@ -258,7 +260,7 @@ function placeWorld(at) {
   const first = !world.visible;
   world.position.copy(at); world.visible = true; reticle.visible = false; placed = true;
   if (first) { bot.position.set(0, HOVER + .5, 0); target.set(0, HOVER, 0); vel.set(0, 0, 0); setEmotion('excited', 2.5); hopT = .5; sfx.play('recover', { pos: bot.position }); toast('Hai! Saya ADAbot 👋'); }
-  hint(''); $('controls').hidden = false; $('btnMove').hidden = mode !== 'ar'; refreshUI();
+  hint(''); $('controls').hidden = false; $('btnMove').hidden = !(mode === 'ar' || gyroOn); refreshUI();
   if (!prime.ready) prime.load().catch(() => {});             // ready before you ask for it
 }
 
@@ -284,20 +286,59 @@ async function startAR() {
   placed = false; world.visible = false; $('controls').hidden = true;
   hint('Gerakkan telefon perlahan-lahan ke kiri dan kanan untuk scan lantai…');
 }
+/* gyro AR (iPhone): the phone is a camera standing EYE metres above the floor, turned by the gyroscope */
+const EYE = 1.35, gyroQ = new THREE.Quaternion();
+const zee = new THREE.Vector3(0, 0, 1), gEuler = new THREE.Euler(), gq0 = new THREE.Quaternion(), gq1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+let gyroSeen = false;
+function onOrient(e) {
+  if (e.alpha == null) return;
+  gyroSeen = true;
+  const d = THREE.MathUtils.DEG2RAD, sc = ((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0) * d;
+  gEuler.set(e.beta * d, e.alpha * d, -e.gamma * d, 'YXZ');
+  gyroQ.setFromEuler(gEuler).multiply(gq1).multiply(gq0.setFromAxisAngle(zee, -sc));
+}
+async function motionAllowed() {
+  const D = window.DeviceOrientationEvent; if (!D) return false;
+  if (typeof D.requestPermission === 'function') { try { return await D.requestPermission() === 'granted'; } catch (e) { console.warn('motion', e); return false; } }
+  return true;
+}
+// match the 3D camera to the phone camera's picture (about 65 degrees across its long side, cropped by object-fit:cover)
+function fitFov() {
+  const v = $('cam'), sa = innerWidth / innerHeight, va = v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : (sa < 1 ? .75 : 4 / 3);
+  const tl = Math.tan(THREE.MathUtils.degToRad(65) / 2), tv = va < 1 ? tl : tl / va, th = tv * va;
+  const tanY = sa < va ? tv : th / sa;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(tanY)); camera.aspect = sa; camera.updateProjectionMatrix();
+}
 async function startCam() {
   sfx.unlock();
-  mode = 'cam'; $('start').hidden = true; $('hud').hidden = false; document.body.classList.add('cammode');
-  camera.position.set(0, 1.6, 4.4); camera.lookAt(0, .5, 0);
-  pad.visible = true;
+  const motion = await motionAllowed();                      // first: iOS only asks while the tap is still "fresh"
+  if (motion) { gyroSeen = false; addEventListener('deviceorientation', onOrient); }
+  mode = 'cam'; $('start').hidden = true; $('hud').hidden = false;
+  let camOK = false;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    const v = $('cam'); v.srcObject = stream; v.hidden = false; await v.play().catch(() => {});
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    const v = $('cam'); v.srcObject = stream; v.hidden = false; await v.play().catch(() => {}); camOK = true;
+    v.onloadedmetadata = v.onresize = () => { if (gyroOn) fitFov(); };
   } catch (e) { console.warn('camera', e); }                // no camera: the robots on a plain background
+  if (motion) for (let i = 0; i < 20 && !gyroSeen; i++) await new Promise(r => setTimeout(r, 50));
+  if (motion && gyroSeen && camOK) {
+    gyroOn = true; fitFov();
+    placed = false; world.visible = false; $('controls').hidden = true;
+    hint('Halakan telefon ke lantai…');
+    return;
+  }
+  if (motion) removeEventListener('deviceorientation', onOrient);
+  document.body.classList.add('cammode');
+  camera.fov = 50; camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  camera.position.set(0, 1.6, 4.4); camera.quaternion.identity(); camera.lookAt(0, .5, 0);
+  pad.visible = true;
   placeWorld(new THREE.Vector3(0, 0, 0));
   setSize(.6);                                               // no real floor to judge by: start a bit smaller
+  if (!motion && typeof window.DeviceOrientationEvent?.requestPermission === 'function') toast('Benarkan "Motion & Orientation" untuk AR lantai');
 }
 function stopAll() {
   if (session) { const s = session; session = null; s.end().catch(() => {}); }
+  if (gyroOn) { removeEventListener('deviceorientation', onOrient); gyroOn = false; }
   hitSource = null; mode = 'start'; placed = false; world.visible = false; reticle.visible = false; pad.visible = false;
   const v = $('cam'); if (v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; } v.hidden = true;
   document.body.classList.remove('cammode');
@@ -315,6 +356,7 @@ function safeFrame(time, xf) {
 }
 function frame(time, xf) {
   const dt = Math.min(clock.getDelta(), .05), t = clock.elapsedTime;
+  if (gyroOn) { camera.position.set(0, EYE, 0); camera.quaternion.copy(gyroQ); camera.updateMatrixWorld(); }
   const cam = mode === 'ar' ? renderer.xr.getCamera() : camera;
   head.setFromMatrixPosition(cam.matrixWorld);
   cam.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
@@ -331,6 +373,15 @@ function frame(time, xf) {
     reticle.visible = !!flat;
     if (flat) { reticle.matrix.fromArray(pose.transform.matrix); reticle.material.opacity = .75 + .25 * Math.sin(t * 5); }
     hint(flat ? 'Ketik skrin untuk letak ADAbot di sini' : 'Gerakkan telefon perlahan-lahan ke kiri dan kanan untuk scan lantai…');
+  }
+
+  // gyro AR: the ring sits where the middle of the screen meets the floor
+  if (gyroOn && !placed) {
+    camera.getWorldDirection(steerV);
+    const d = steerV.y < -.12 ? EYE / -steerV.y : Infinity, ok = d * Math.hypot(steerV.x, steerV.z) < 4.5;
+    reticle.visible = ok;
+    if (ok) { reticle.matrix.makeTranslation(steerV.x * d, 0, steerV.z * d); reticle.material.opacity = .75 + .25 * Math.sin(t * 5); }
+    hint(ok ? 'Ketik skrin untuk letak ADAbot di sini' : 'Halakan telefon ke lantai…');
   }
 
   if (emo.until && t > emo.until) setEmotion(botMode === 'sleep' ? 'sleep' : 'idle');
@@ -365,9 +416,10 @@ function frame(time, xf) {
 /* ------------------------------------------------------------------ start */
 function setStartButton(ar) {
   const b = $('btnStart'); b.disabled = false;
-  b.textContent = ar ? 'Mula AR' : 'Mula (mod kamera)';
+  b.textContent = ar || hasGyro() ? 'Mula AR' : 'Mula (mod kamera)';
   b.onclick = ar ? startAR : startCam;
 }
+const hasGyro = () => 'DeviceOrientationEvent' in window && matchMedia('(pointer: coarse)').matches;
 async function boot() {
   initScene(); setupStick(); setupTouches();
   $('btnExit').onclick = stopAll;
@@ -378,7 +430,9 @@ async function boot() {
   const [ar] = await Promise.all([arSupported(), loadBot().catch(e => { console.error(e); $('startNote').textContent = 'ADAbot tak dapat dimuatkan. Muat semula halaman.'; })]);
   setStartButton(ar);
   if (!ar) $('startNote').textContent = window.isSecureContext
-    ? 'Telefon ni tak sokong AR scan lantai (contohnya iPhone). ADAbot akan keluar atas gambar kamera. Untuk AR penuh, guna Chrome di telefon Android.'
+    ? (hasGyro()
+      ? 'iPhone: ADAbot dikunci atas lantai guna giroskop. Benarkan kamera dan "Motion & Orientation". Berdiri di satu tempat dan pusing telefon (jangan berjalan).'
+      : 'Telefon ni tak sokong AR scan lantai. ADAbot akan keluar atas gambar kamera. Untuk AR penuh, guna Chrome di telefon Android.')
     : 'AR perlukan sambungan https.';
 }
 boot();
